@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 void main() {
   runApp(const MyApp());
@@ -11,166 +12,157 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Gemini Chat',
+      title: 'Command Executor',
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: const HomeScreen(),
+      home: const CommandScreen(),
     );
   }
 }
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class CommandScreen extends StatefulWidget {
+  const CommandScreen({Key? key}) : super(key: key);
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<CommandScreen> createState() => _CommandScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  late final GenerativeModel geminiVisionProModel;
-  late final ChatSession chatSession;
-  final FocusNode _textFieldFocus = FocusNode();
-  final _textController = TextEditingController();
-  final _scrollController = ScrollController();
+class _CommandScreenState extends State<CommandScreen> {
+  final TextEditingController _commandController = TextEditingController();
+  final FocusNode _commandFocus = FocusNode();
+  final ScrollController _scrollController = ScrollController();
+  final List<Map<String, String>> _chatHistory = [];
+  bool _isLoading = false;
 
-  @override
-  void initState() {
-    const apiKey = "";
-    if (apiKey == 'key not found') {
-      throw InvalidApiKey(
-        'Key not found in environment. Please add an API key.',
-      );
-    }
+  final String apiUrl =
+      "https://skye-2xsolution.vercel.app/command"; // Replace with your API URL
 
-    geminiVisionProModel = GenerativeModel(
-      model: 'gemini-1.5-pro',
-      apiKey: apiKey,
-      generationConfig: GenerationConfig(
-        temperature: 0.4,
-        topK: 32,
-        topP: 1,
-        maxOutputTokens: 4096,
-      ),
-      safetySettings: [
-        SafetySetting(HarmCategory.harassment, HarmBlockThreshold.high),
-        SafetySetting(HarmCategory.hateSpeech, HarmBlockThreshold.high),
-      ],
-    );
+  Future<void> _sendCommand(String command) async {
+    if (command.isEmpty) return;
 
-    chatSession = geminiVisionProModel.startChat();
-    super.initState();
-  }
+    setState(() {
+      _isLoading = true;
+      _chatHistory.add({"role": "user", "message": command});
+    });
 
-  Future<void> _sendChatMessage(String message) async {
-    setState(() {});
     try {
-      final response = await chatSession.sendMessage(
-        Content.text(message),
+      final response = await http.post(
+        Uri.parse(apiUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization':
+              'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2NzQwNWY3NGZhNTQxN2FlOWMxZWFmNDQiLCJpYXQiOjE3MzIyNzE5ODgsImV4cCI6MTczMjg3Njc4OH0.ehG_Ct02PzoKCpiefExII5HOaXh0nM4AJPQ1SIVsU1Q',
+        },
+        body: jsonEncode({"command": command}),
       );
-      final text = response.text;
-      if (text == null) {
-        _showError('No response from API');
-        return;
+
+      if (response.statusCode == 200) {
+        final responseBody = jsonDecode(response.body);
+        setState(() {
+          _chatHistory.add({"role": "api", "message": responseBody});
+        });
       } else {
         setState(() {
-          _scrollDown();
+          _chatHistory.add({
+            "role": "api",
+            "message": "Error: ${response.statusCode} - ${response.body}"
+          });
         });
       }
     } catch (e) {
-      _showError(e.toString());
-      setState(() {});
+      setState(() {
+        _chatHistory.add({"role": "api", "message": "Error: $e"});
+      });
     } finally {
-      _textController.clear();
-      setState(() {});
-      _textFieldFocus.requestFocus();
+      _commandController.clear();
+      _scrollToBottom();
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
 
-  Future<void> _showError(String message) async {
-    showDialog(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: const Text('Something went wrong'),
-            content: SingleChildScrollView(
-              child: SelectableText(message),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-                child: const Text('OK'),
-              )
-            ],
-          );
-        });
-  }
-
-  Future<void> _scrollDown() async {
-    WidgetsBinding.instance.addPostFrameCallback((_) =>
-        _scrollController.animateTo(_scrollController.position.maxScrollExtent,
-            duration: const Duration(microseconds: 750),
-            curve: Curves.easeOutCirc));
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Gemini Chat'),
+        title: const Text('Command Executor'),
       ),
       body: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
             child: ListView.builder(
-                controller: _scrollController,
-                itemCount: chatSession.history.length,
-                itemBuilder: (context, index) {
-                  final Content content = chatSession.history.toList()[index];
-                  final message = content.parts
-                      .whereType<TextPart>()
-                      .map<String>((e) => e.text)
-                      .join('');
+              controller: _scrollController,
+              itemCount: _chatHistory.length,
+              itemBuilder: (context, index) {
+                final chat = _chatHistory[index];
+                final isUser = chat["role"] == "user";
 
-                  return Text(
-                    '$message\nisUser: ${content.role}',
-                  );
-                }),
+                return Container(
+                  margin:
+                      const EdgeInsets.symmetric(vertical: 5, horizontal: 10),
+                  alignment:
+                      isUser ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: isUser
+                          ? Colors.blueAccent.withOpacity(0.8)
+                          : Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      chat["message"]!,
+                      style: TextStyle(
+                        color: isUser ? Colors.white : Colors.black,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
+          if (_isLoading)
+            const Padding(
+              padding: EdgeInsets.all(8.0),
+              child: CircularProgressIndicator(),
+            ),
           Padding(
             padding: const EdgeInsets.all(15),
             child: Row(
               children: [
                 Expanded(
                   child: TextField(
-                    autofocus: true,
-                    focusNode: _textFieldFocus,
-                    decoration: InputDecoration(
-                      contentPadding: const EdgeInsets.all(15),
-                      hintText: 'Enter a prompt...',
+                    controller: _commandController,
+                    focusNode: _commandFocus,
+                    decoration: const InputDecoration(
+                      hintText: "Enter your command...",
                       border: OutlineInputBorder(
-                          borderRadius:
-                              const BorderRadius.all(Radius.circular(14)),
-                          borderSide: BorderSide(
-                              color: Theme.of(context).colorScheme.secondary)),
-                      focusedBorder: OutlineInputBorder(
-                          borderRadius:
-                              const BorderRadius.all(Radius.circular(14)),
-                          borderSide: BorderSide(
-                              color: Theme.of(context).colorScheme.secondary)),
+                        borderRadius: BorderRadius.all(Radius.circular(10)),
+                      ),
                     ),
-                    controller: _textController,
-                    onSubmitted: _sendChatMessage,
+                    onSubmitted: _sendCommand,
                   ),
                 ),
-                const SizedBox(height: 25)
+                const SizedBox(width: 10),
+                IconButton(
+                  icon: const Icon(Icons.send),
+                  onPressed: () => _sendCommand(_commandController.text),
+                ),
               ],
             ),
-          )
+          ),
         ],
       ),
     );
